@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.3)
+cmake_minimum_required(VERSION 3.6)
 project(consistent_gsm)
 
 add_definitions(-std=c++14)
@@ -109,8 +109,8 @@ MESSAGE(STATUS "CATKIN_PACKAGE_LIB_DESTINATION: ${CATKIN_PACKAGE_LIB_DESTINATION
 cs_install()
 cs_export()
 
-##########
-# naive test in compiling   #
-##########
-add_executable(hello_world src/hello_world.cpp)
-target_link_libraries(hello_world ${catkin_LIBRARIES})
+# ##########
+# # naive test in compiling   #
+# ##########
+# add_executable(hello_world src/hello_world.cpp)
+# target_link_libraries(hello_world ${catkin_LIBRARIES})

@@ -1,9 +1,5 @@
 
-import sys
-import os
-import time
-import h5py
-import re
+import os, sys, time, h5py
 import numpy as np
 from scipy.spatial.transform import Slerp, Rotation
 import cv2
@@ -13,6 +9,10 @@ import pcl
 import panoptic_mapping.utils.semantics.semantic_utils as semantic_utils
 from panoptic_mapping.utils.semantics.pano_colormap import *
 import semantic_mapping.utils.depth_seg_utils as depth_seg_utils
+
+
+from common_utils import isPoseValid, dictToHd5, hd5ToDict
+
 
 class Segment:
     def __init__(self, points, is_thing, instance_label, class_label, \
@@ -471,53 +471,6 @@ class SegmentsGenerator:
             segments_list.append(segment)
         return segments_list
 
-def dictToHd5(file, dict):
-	f = h5py.File(file,'w')
-	for key in dict:
-		f[key] = dict[key]
-	f.close() 
-	return None
-
-def hd5ToDict(file):
-	f = h5py.File(file,'r')
-	dict = {}
-	for key in f:
-		dict[key] = np.array(f[key])
-	f.close() 
-	return dict
-
-def checkSegmentFramesEqual(segs_framesA, segs_framesB):
-    if(len(segs_framesA)!=len(segs_framesB)):
-        print(" Not Equal, length of segment lists")
-        return False
-    for f_i, seg_A in enumerate(segs_framesA):
-        seg_B = segs_framesB[f_i]
-        # print("     check seg num %d "%(f_i))
-        if(not np.isclose(seg_A.pose,seg_B.pose).all()):
-            print("    Not Equal pose in %d frame "%(f_i))
-            return False
-        if(not np.isclose(seg_A.center,seg_B.center).all()):
-            print("    Not Equal center in %d frame "%(f_i))
-            return False
-        if(not np.isclose(seg_A.points,seg_B.points, atol=1e-4).all()):
-            print("    Not Equal points in %d frame "%(f_i))
-            return False
-        if(not np.isclose(seg_A.inst_confidence,seg_B.inst_confidence).all()):
-            print("    Not Equal label_confidence in %d frame "%(f_i))
-            return False
-        if(not np.isclose(seg_A.overlap_ratio,seg_B.overlap_ratio).all()):
-            print("    Not Equal label_confidence in %d frame "%(f_i))
-            return False
-        if((seg_A.instance_label!=seg_B.instance_label)):
-            print("    Not Equal instance_label in %d frame "%(f_i))
-            return False
-        if((seg_A.class_label!=seg_B.class_label)):
-            print("    Not Equal class_label in %d frame "%(f_i))
-            return False
-        if((seg_A.is_thing!=seg_B.is_thing)):
-            print("    Not Equal class_label in %d frame "%(f_i))
-            return False
-    return True
 
 class ScennNNDataLoader:
     def __init__(self, dir):

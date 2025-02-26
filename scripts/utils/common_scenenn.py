@@ -1,9 +1,4 @@
-
-import sys
-import os
-import time
-import h5py
-
+import os, sys, time, h5py
 import numpy as np
 from scipy.spatial.transform import Slerp, Rotation
 import cv2
@@ -11,23 +6,8 @@ from collections import Counter
 import pcl
 
 from semantics.pano_colormap import *
+from utils.common_utils import preprocess, isPoseValid, dictToHd5, hd5ToDict
 
-def preprocess(depth_img):
-    depth_img_rescaled = None
-    if depth_img.dtype == np.uint16:
-        # convert depth image from mili-meters to meters
-        depth_img_rescaled = cv2.rgbd.rescaleDepth(depth_img, cv2.CV_32FC1)
-    elif depth_img.dtype == np.float32:
-        depth_img_rescaled = depth_img
-    else:
-        print("Unknown depth image encoding.")
-        return None
-
-    kZeroValue = 0.0
-    nan_mask = (depth_img_rescaled != depth_img_rescaled)
-    depth_img_rescaled[nan_mask] = kZeroValue # set nan pixels to 0
-
-    return depth_img_rescaled
 
 class Segment:
     def __init__(self, points, is_thing, instance_label, class_label, \
@@ -380,53 +360,6 @@ class SegmentsGenerator:
             segments_list.append(segment)
         return segments_list
 
-def dictToHd5(file, dict):
-	f = h5py.File(file,'w')
-	for key in dict:
-		f[key] = dict[key]
-	f.close() 
-	return None
-
-def hd5ToDict(file):
-	f = h5py.File(file,'r')
-	dict = {}
-	for key in f:
-		dict[key] = np.array(f[key])
-	f.close() 
-	return dict
-
-def checkSegmentFramesEqual(segs_framesA, segs_framesB):
-    if(len(segs_framesA)!=len(segs_framesB)):
-        print(" Not Equal, length of segment lists")
-        return False
-    for f_i, seg_A in enumerate(segs_framesA):
-        seg_B = segs_framesB[f_i]
-        # print("     check seg num %d "%(f_i))
-        if(not np.isclose(seg_A.pose,seg_B.pose).all()):
-            print("    Not Equal pose in %d frame "%(f_i))
-            return False
-        if(not np.isclose(seg_A.center,seg_B.center).all()):
-            print("    Not Equal center in %d frame "%(f_i))
-            return False
-        if(not np.isclose(seg_A.points,seg_B.points, atol=1e-4).all()):
-            print("    Not Equal points in %d frame "%(f_i))
-            return False
-        if(not np.isclose(seg_A.inst_confidence,seg_B.inst_confidence).all()):
-            print("    Not Equal label_confidence in %d frame "%(f_i))
-            return False
-        if(not np.isclose(seg_A.overlap_ratio,seg_B.overlap_ratio).all()):
-            print("    Not Equal label_confidence in %d frame "%(f_i))
-            return False
-        if((seg_A.instance_label!=seg_B.instance_label)):
-            print("    Not Equal instance_label in %d frame "%(f_i))
-            return False
-        if((seg_A.class_label!=seg_B.class_label)):
-            print("    Not Equal class_label in %d frame "%(f_i))
-            return False
-        if((seg_A.is_thing!=seg_B.is_thing)):
-            print("    Not Equal class_label in %d frame "%(f_i))
-            return False
-    return True
 
 class DataLoader:
     def __init__(self, dir, traj_filename):
@@ -535,15 +468,3 @@ class DataLoader:
         K = np.array([[544.47329,0,320],[0,544.47329,240],[0,0,1]])
         return K.astype(np.float32)
     
-def isPoseValid( pose):
-    is_nan = np.isnan(pose).any() or np.isinf(pose).any()
-    if is_nan:
-        return False
-
-    R_matrix = pose[:3, :3]
-    I = np.identity(3)
-    is_rotation_valid = ( np.isclose( np.matmul(R_matrix, R_matrix.T), I , atol=1e-3) ).all and np.isclose(np.linalg.det(R_matrix) , 1, atol=1e-3)
-    if not is_rotation_valid:
-        return False
-
-    return True

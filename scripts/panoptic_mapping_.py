@@ -83,10 +83,14 @@ def parse_args():
 
     # for SegGraph
     parse.add_argument("--seg_graph_confidence", type=int, default=0, 
-        help="0 for all confidence as 1; 1 for using inst score; \
-        2 for use inst score and overlap ratio; 3 for use inst score, overlap ratio and geometric confidence")
-    parse.add_argument("--use_inst_label_connect", type=int, default=1, help="")
-    parse.add_argument("--connection_ratio_th", type=float, default=0.2, help="")
+        help="0 for all confidence as 1; \
+            1 for using inst score; \
+            2 for use inst score and overlap ratio; \
+            3 for use inst score, overlap ratio and geometric confidence")
+    parse.add_argument("--use_inst_label_connect", type=int, default=1, 
+        help="")
+    parse.add_argument("--connection_ratio_th", type=float, default=0.2, 
+        help="")
     parse.add_argument("--test_geometric_confidence", action='store_true', 
         help="try test geometric confidence calculation")
 
@@ -99,7 +103,7 @@ def parse_args():
         help="use label confidence")  
     return parse.parse_args()
 
-def ResultsDirectories(result_folder):
+def make_res_dirs(result_folder):
     result_dirs = {}
 
     log_file = os.path.join(result_folder, 'log')
@@ -114,6 +118,10 @@ def ResultsDirectories(result_folder):
 
     return result_dirs
 
+
+
+
+
 def main():
     import consistent_gsm
     import depth_segmentation_py
@@ -124,24 +132,25 @@ def main():
     # dataset 
     dataset = args.dataset
     panoptic_node = None
+    from utils.common_utils import isPoseValid, checkSegmentFramesEqual
     if dataset == "scenenn":
         from utils.common_scenenn import \
-            Segment, SegmentsGenerator, DataLoader, isPoseValid, checkSegmentFramesEqual
+            Segment, SegmentsGenerator, DataLoader
         PerceptionNode = semantic_utils.PerceptionNode
         panoptic_node = PerceptionNode()
     elif dataset == "scannet":
         from utils.common_scannet import \
-            Segment, SegmentsGenerator, DataLoader, isPoseValid, checkSegmentFramesEqual
+            Segment, SegmentsGenerator, DataLoader
         PerceptionNode = semantic_utils.PerceptionNode
         panoptic_node = PerceptionNode()
     elif dataset == "scannet_nyu":
         from utils.common_scannet_nyu import \
-            Segment, SegmentsGenerator, DataLoader, isPoseValid, checkSegmentFramesEqual
+            Segment, SegmentsGenerator, DataLoader
         PerceptionNode = semantic_utils.Mask2FormerNode
         panoptic_node = PerceptionNode()
     elif dataset == "scannet_nyu_gt":
         from utils.common_scannet_nyu import \
-            Segment, SegmentsGenerator, DataLoader, isPoseValid, checkSegmentFramesEqual
+            Segment, SegmentsGenerator, DataLoader
         PerceptionNode = semantic_utils.GTMaskNode
         panoptic_node = PerceptionNode(args.gt_mask_folder)
     else:
@@ -172,7 +181,7 @@ def main():
     result_folder = args.result_folder
     data_path = args.data_folder
     scene_folder = os.path.join(data_path, scene_num)
-    result_dirs = ResultsDirectories(result_folder)
+    result_dirs = make_res_dirs(result_folder)
 
     intermediate_folder = args.intermediate_seg_folder
     segments_folder = intermediate_folder
@@ -193,12 +202,16 @@ def main():
     start = args.start
     assert(start >=  data_loader.indexes[0])
     end = args.end
-    if end<0:
+    if end < 0:
         end = data_loader.index_max
     step = args.step
     num_threads = args.num_threads
 
-    # initialized integrator
+
+
+
+
+    # ============================== initialized integrator ==============================
     log_file = os.path.abspath(result_dirs['log'])
     gsm_node = consistent_gsm.GlobalSegmentMap_py(
         log_file, task, 
@@ -212,24 +225,33 @@ def main():
     )
     gsm_node.outputLog(log_info)
     # gsm_node.outputLog("using traj_f: "+str(data_loader.traj_f))
-    gsm_node.outputLog("using poses: "+str(data_loader.pose_folder))
+    # gsm_node.outputLog("using poses: "+str(data_loader.pose_folder))
 
     if(not use_temporal_results):
         # initialized segmentors and seg generators
         dep_segmentor = depth_segmentation_py.DepthSegmentation_py(
             height,width,cv2.CV_32FC1, K_depth
         )
-        segments_generator = SegmentsGenerator(
-            gsm_node, dep_segmentor, panoptic_node,
-            save_results_img, result_dirs['folder'], 
-            save_segments, use_temporal_results, segments_folder
-        )
+    else:
+        dep_segmentor = None
+        panoptic_node = None
 
-        for i in tqdm(range(start, end, step)):
-            rgb_img, depth_img, pose = data_loader.getDataFromIndex(i)
-            if(rgb_img is None or depth_img is None or pose is None):
-                gsm_node.outputLog(f"Skipping frame {i}")
-                continue
+    # create the segment generator
+    segments_generator = SegmentsGenerator(
+        gsm_node, dep_segmentor, panoptic_node,
+        save_results_img, result_dirs['folder'], 
+        save_segments, use_temporal_results, segments_folder
+    )
+
+    for i in tqdm(range(start, end, step)):
+        rgb_img, depth_img, pose = data_loader.getDataFromIndex(i)
+        # check data validity
+        if(rgb_img is None or depth_img is None or pose is None):
+            gsm_node.outputLog(f"Skipping frame {i}")
+            continue
+
+        # generate depth segmentations 
+        if(not use_temporal_results):
             t0 = time.time()
             segment_list: list[Segment] = segments_generator.frameToSegments(depth_img, rgb_img, pose, i)
             gsm_node.outputLog("   Seg Generation in python cost %f s" %(time.time() - t0))
@@ -250,58 +272,50 @@ def main():
                     continue
                 if(seg_graph_confidence == 3):
                     segment.calculateBBox()
-                # (self: consistent_gsm.GlobalSegmentMap_py, 
-                # arg0: array, arg1: array, 
-                # arg2: int, arg3: int, 
-                # arg4: float, arg5: float, 
-                # arg6: array, 
-                # arg7: bool, arg8: int)
+                
+                # arg0: array, arg1: array, arg2: int, arg3: int, 
+                # arg4: float, arg5: float, arg6: array, arg7: bool, arg8: int)
                 gsm_node.insertSegments(
-                    segment.points, 
-                    segment.box_points, 
-                    int(segment.instance_label), 
-                    segment.class_label, 
-                    segment.inst_confidence, 
-                    segment.overlap_ratio, 
-                    segment.pose, 
-                    segment.is_thing, 
-                    segment.segment_label
+                    segment.points, segment.box_points, 
+                    segment.instance_label, segment.class_label, 
+                    segment.inst_confidence, segment.overlap_ratio, 
+                    segment.pose, segment.is_thing, segment.segment_label
                 )
-            gsm_node.integrateFrame()
-            gsm_node.clearTemporaryMemory()
-    else:
-        # initialized seg generators
-        segments_generator = SegmentsGenerator(
-            gsm_node, None, None, 
-            save_results_img, result_dirs['folder'], 
-            save_segments, use_temporal_results, segments_folder
-        )
-        for i in tqdm(range(start, end, step)):
-            # read in segments
+        # load from storage
+        else:
+            # read scled depths
             depth_scaled = data_loader.getDepthScaledFromIndex(i)
             if depth_scaled is None:
                 continue
+
+            # read in segments
             segment_list = segments_generator.loadSegments(depth_scaled, K_depth, i)
             if len(segment_list) == 0:
                 continue
-            # check pose calidity
-            pose_invalid = False
-            for seg in segment_list:
-                if not isPoseValid(seg.pose):
-                    pose_invalid = True
-                    break
-            if pose_invalid:
-                continue
+
+            # # check pose validity ? why this is needed ?
+            # pose_invalid = False
+            # for seg in segment_list:
+            #     if not isPoseValid(seg.pose):
+            #         pose_invalid = True
+            #         break
+            # if pose_invalid:
+            #     continue
             
             for segment in segment_list:
                 if(seg_graph_confidence == 3 and segment.is_thing):
                     segment.calculateBBox()
                 pose = data_loader.getPoseFromIndex(i)
-                gsm_node.insertSegments(segment.points,
-                    segment.box_points, segment.instance_label,segment.class_label, 
-                    segment.inst_confidence, segment.overlap_ratio ,pose, segment.is_thing)
-            gsm_node.integrateFrame()
-            gsm_node.clearTemporaryMemory()
+                gsm_node.insertSegments(
+                    segment.points, segment.box_points, 
+                    segment.instance_label, segment.class_label, 
+                    segment.inst_confidence, segment.overlap_ratio, 
+                    pose, segment.is_thing, segment.segment_label
+                )
+        
+        gsm_node.integrateFrame()
+        gsm_node.clearTemporaryMemory()
+
 
     # generate log and mesh
     gsm_node.LogLabelInformation()

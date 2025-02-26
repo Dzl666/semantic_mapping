@@ -1,38 +1,18 @@
-
-import sys
-import os
-import time
-import threading
-import h5py
+import os, sys, time, threading, h5py
 import numpy as np
 from scipy.spatial.transform import Slerp, Rotation
 import cv2
 from collections import Counter
-
-from semantics.pano_scannet_nyu_colormap import *
 from multiprocessing import Process
 
 import sys
 sys.path.append("/usr/lib/python3/dist-packages")
-# import pcl
 import open3d as o3d
 
-def preprocess(depth_img):
-    depth_img_rescaled = None
-    if depth_img.dtype == np.uint16:
-        # convert depth image from mili-meters to meters
-        depth_img_rescaled = cv2.rgbd.rescaleDepth(depth_img, cv2.CV_32FC1)
-    elif depth_img.dtype == np.float32:
-        depth_img_rescaled = depth_img
-    else:
-        print("Unknown depth image encoding.")
-        return None
+# self packages
+from semantics.pano_scannet_nyu_colormap import *
+from utils.common_utils import preprocess, isPoseValid, dictToHd5, hd5ToDict
 
-    kZeroValue = 0.0
-    nan_mask = (depth_img_rescaled != depth_img_rescaled)
-    depth_img_rescaled[nan_mask] = kZeroValue # set nan pixels to 0
-
-    return depth_img_rescaled
 
 class SegmentDepthWrapper(threading.Thread):
 
@@ -421,11 +401,11 @@ class SegmentsGenerator:
                     # if(candidate_area>0.01*id2info_instance[panoptic_id]['area'] and candidate_area<0.2*depth_seg_area): # Tune6
                     # if(candidate_area>0.01*id2info_instance[panoptic_id]['area'] and candidate_area<0.5*depth_seg_area): # Tune7
                     # if(candidate_area>0.01*id2info_instance[panoptic_id]['area'] and candidate_area<0.99*depth_seg_area): # Tune8
-                    
                     if(candidate_area>0.9*id2info_instance[panoptic_id]['area'] and candidate_area<0.5*depth_seg_area): # Han et al
                     # if(candidate_area>0.01*id2info_instance[panoptic_id]['area'] and candidate_area<0.8*depth_seg_area): # Tune9 ours
                     # if(False): # voxbloxpp
-                    # if depth-undersegment, then further seg it 
+
+                        # if depth-undersegment, then further seg it 
                         extracted_mask = np.logical_and(depth_seg_mask, panop_seg_masks[:,:,panoptic_id])
                         overlap_ratio = candidate_area * 1.0 / id2info_instance[panoptic_id]['area']
                         inst_score = 1.0 if is_thing else 0.5
@@ -558,8 +538,9 @@ class SegmentsGenerator:
         else:
             # only do depth segmentation
             seg_result_2D = self.Segmennt2D(depth_img, rgb_img, frame_i)
+        
+        # return if got nothing from 2D segmentation
         if seg_result_2D is None:
-            # return if got nothing from 2D segmentation
             print("Got nothing from 2D segmentation!")
             return segment_list 
         
@@ -591,16 +572,19 @@ class SegmentsGenerator:
 
         segments_list = []
         mask_f = os.path.join(self.segments_folder, str(frame_i).zfill(5)+"_mask.png")
-        mask = cv2.imread(mask_f, cv2.IMREAD_UNCHANGED)
         seg_info_f = os.path.join(self.segments_folder, str(frame_i).zfill(5)+"_seg_info.h5")
         if( (not os.path.isfile(mask_f)) or (not os.path.isfile(seg_info_f)) ):
             return segments_list
 
+        mask = cv2.imread(mask_f, cv2.IMREAD_UNCHANGED)
         seg_info= hd5ToDict(seg_info_f)
-        seg_indexes = np.unique(mask)
+        # seg_indexes = np.unique(mask)
+
         for seg_i in range(seg_info['seg_num']):
             seg_mask = (mask==(seg_i+1))
-            points = cv2.rgbd.depthTo3d(depth=depth_scaled,K=camera_K,mask=seg_mask.astype(np.uint8))
+            # create p3d from depths
+            points = cv2.rgbd.depthTo3d(depth_scaled, camera_K, seg_mask.astype(np.uint8))
+
             is_thing = seg_info['is_thing'][seg_i]
             instance_label = seg_info['instance_label'][seg_i]
             class_label = seg_info['class_label'][seg_i]
@@ -608,64 +592,21 @@ class SegmentsGenerator:
             overlap_ratio = seg_info['overlap_ratio'][seg_i]
             pose = seg_info['pose'][seg_i]
             center = seg_info['center'][seg_i]
+
             segment_label = 0
             if 'segment_label' in seg_info:
                 segment_label = seg_info['segment_label'][seg_i]
+            
+
             segment = Segment(points, is_thing, instance_label, class_label, 
                 inst_confidence, overlap_ratio, pose, seg_i, center, segment_label)
             if(segment.points.shape[0] < 1):
                 continue
             # segment.calculateConfidenceDefault()
             segments_list.append(segment)
+        
         return segments_list
 
-def dictToHd5(file, dict):
-	f = h5py.File(file,'w')
-	for key in dict:
-		f[key] = dict[key]
-	f.close() 
-	return None
-
-def hd5ToDict(file):
-	f = h5py.File(file,'r')
-	dict = {}
-	for key in f:
-		dict[key] = np.array(f[key])
-	f.close() 
-	return dict
-
-def checkSegmentFramesEqual(segs_framesA, segs_framesB):
-    if(len(segs_framesA)!=len(segs_framesB)):
-        print(" Not Equal, length of segment lists")
-        return False
-    for f_i, seg_A in enumerate(segs_framesA):
-        seg_B = segs_framesB[f_i]
-        # print("     check seg num %d "%(f_i))
-        if(not np.isclose(seg_A.pose,seg_B.pose).all()):
-            print("    Not Equal pose in %d frame "%(f_i))
-            return False
-        if(not np.isclose(seg_A.center,seg_B.center).all()):
-            print("    Not Equal center in %d frame "%(f_i))
-            return False
-        if(not np.isclose(seg_A.points,seg_B.points, atol=1e-4).all()):
-            print("    Not Equal points in %d frame "%(f_i))
-            return False
-        if(not np.isclose(seg_A.inst_confidence,seg_B.inst_confidence).all()):
-            print("    Not Equal label_confidence in %d frame "%(f_i))
-            return False
-        if(not np.isclose(seg_A.overlap_ratio,seg_B.overlap_ratio).all()):
-            print("    Not Equal label_confidence in %d frame "%(f_i))
-            return False
-        if((seg_A.instance_label!=seg_B.instance_label)):
-            print("    Not Equal instance_label in %d frame "%(f_i))
-            return False
-        if((seg_A.class_label!=seg_B.class_label)):
-            print("    Not Equal class_label in %d frame "%(f_i))
-            return False
-        if((seg_A.is_thing!=seg_B.is_thing)):
-            print("    Not Equal class_label in %d frame "%(f_i))
-            return False
-    return True
 
 class DataLoader:
     def __init__(self, dir, traj_filename, preload_img = False, preload_depth = False):
@@ -819,23 +760,12 @@ class DataLoader:
         
         pose = self.poses[index]
         # check validity of pose
-        is_pose_valid = self.isPoseValid(pose)
+        is_pose_valid = isPoseValid(pose)
         if not is_pose_valid:
             return None,None,None
 
         return rgb_img_aligned, depth_img, pose.astype(np.float32)
 
-    def isPoseValid(self, pose):
-        is_nan = np.isnan(pose).any() or np.isinf(pose).any()
-        if is_nan:
-            return False
-
-        R_matrix = pose[:3, :3]
-        I = np.identity(3)
-        is_rotation_valid = ( np.isclose( np.matmul(R_matrix, R_matrix.T), I , atol=1e-3) ).all and np.isclose(np.linalg.det(R_matrix) , 1, atol=1e-3)
-        if not is_rotation_valid:
-            return False
-        return True
 
     def getDepthScaledFromIndex(self, index):
         if index == -1:
@@ -857,179 +787,3 @@ class DataLoader:
         # return depth camera matrix 
         return self.depth_intrinsic.astype(np.float32)
 
-class DataLoaderSceneNN:
-    def __init__(self, dir, traj_filename, preload_img = False, preload_depth = False):
-        # whether to preload data into memory
-        self.preload_img = preload_img
-        self.preload_depth = preload_depth
-
-        # parse data location
-        self.dir = dir
-        self.depth_folder = os.path.join(self.dir, "depth")
-        self.depth_files = os.listdir(self.depth_folder)
-        self.depth_files.sort()
-        self.depth_indexes = [int(depth_f[5:10])-1 for depth_f in self.depth_files]
-        self.depth_path_map = {index: os.path.join(self.depth_folder, "depth"+str(index+1).zfill(5)+".png") \
-                                for index in self.depth_indexes}
-
-        self.rgb_folder = os.path.join(self.dir, "image")
-        self.rgb_files = os.listdir(self.rgb_folder)
-        self.rgb_files.sort()
-        self.rgb_indexes = [int(color_f[5:10])-1 for color_f in self.rgb_files]
-        self.rgb_path_map = {index: os.path.join(self.rgb_folder, "image"+str(index+1).zfill(5)+".png") \
-                                for index in self.rgb_indexes}
-
-        # load poses first
-        self.traj_f = os.path.join(self.dir, traj_filename)
-        self.readTrajectory()
-        self.traj_indexes = list(self.poses.keys())
-
-        # get frame indexs
-        self.indexes = set.intersection( set(self.depth_indexes), set(self.rgb_indexes),  set(self.traj_indexes))
-        self.indexes = list(self.indexes)
-        self.indexes.sort()
-        self.index_min = min(self.indexes)
-        self.index_max = max(self.indexes)  
-
-        # # get camera matrixs
-        # self.rgb_extrinsic_f = os.path.join(self.dir, "intrinsic", "extrinsic_color.txt")
-        # self.rgb_intrinsic_f = os.path.join(self.dir, "intrinsic", "intrinsic_color.txt")
-        # self.depth_extrinsic_f = os.path.join(self.dir, "intrinsic", "extrinsic_depth.txt")
-        # self.depth_intrinsic_f = os.path.join(self.dir, "intrinsic", "intrinsic_depth.txt")
-        # self.rgb_extrinsic = np.loadtxt(self.rgb_extrinsic_f)
-        # self.rgb_intrinsic = np.loadtxt(self.rgb_intrinsic_f)[:3, :3]
-        # self.depth_extrinsic = np.loadtxt(self.depth_extrinsic_f)
-        # self.depth_intrinsic = np.loadtxt(self.depth_intrinsic_f)[:3, :3]
-        # assert(np.isclose(np.eye(4), self.rgb_extrinsic).all())
-        # assert(np.isclose(np.eye(4), self.depth_extrinsic).all())
-        # self.homograph_color_to_depth = self.depth_intrinsic @ np.linalg.inv(self.rgb_intrinsic)
-
-        # get depth image shape 
-        depth_f = self.depth_path_map[self.indexes[0]]
-        depth_img = cv2.imread(depth_f,cv2.IMREAD_UNCHANGED)
-        self.depth_h = depth_img.shape[0]
-        self.depth_w = depth_img.shape[1]
-
-        # # preload data in RAM
-        # if self.preload_img:
-        #     self.images = {}
-        #     for idx in self.indexes:
-        #         image_f = self.rgb_path_map[idx]
-        #         rgb_img = cv2.imread(image_f,cv2.IMREAD_UNCHANGED)
-        #         rgb_img_aligned = cv2.warpPerspective(rgb_img, self.homograph_color_to_depth,
-        #             (self.depth_w, self.depth_h) )
-        #         self.images[idx] = rgb_img_aligned
-
-        # if self.preload_depth:
-        #     self.depths = {}
-        #     for idx in self.indexes:
-        #         depth_f = self.depth_path_map[idx]
-        #         depth_img = cv2.imread(depth_f,cv2.IMREAD_UNCHANGED)
-        #         self.depths[idx] = depth_img
-
-    def readTrajectory(self):
-        self.poses = {}
-        f = open(self.traj_f,'r')
-        T_WC = []
-        current_id = None
-        for line in f.readlines():
-            data = line.split(' ')
-            if(len(data) == 3):
-                if T_WC:
-                    T_WC = np.array(T_WC)
-                    r = Rotation.from_matrix(T_WC[:3,:3])
-                    T_WC[:3,:3] = r.as_matrix()
-                    self.poses[current_id] = np.array(T_WC).reshape(4,4)
-                current_id = int(data[0])
-                T_WC = []
-
-            elif(len(data) == 4):
-                T_WC.append([float(data[0]),float(data[1]),float(data[2]),float(data[3])])
-        f.close()
-
-    def getPoseFromIndex(self, index):
-        pose = self.poses[index]
-        return pose
-
-    def getDataFromIndex(self, index):
-        # normally start from 0: 0.; 0-indexed
-        if(index not in self.indexes):
-            return None,None,None
-
-        depth_img = None
-        pose = None
-
-        if self.preload_img:
-            rgb_img_aligned = self.images[index]
-        else:
-            image_f = self.rgb_path_map[index]
-            rgb_img = cv2.imread(image_f,cv2.IMREAD_UNCHANGED)
-
-        if self.preload_depth:
-            depth_img = self.depths[index]
-        else:
-            depth_f = self.depth_path_map[index]
-            depth_img = cv2.imread(depth_f,cv2.IMREAD_UNCHANGED)
-        
-        pose = self.poses[index]
-        # check validity of pose
-        is_pose_valid = self.isPoseValid(pose)
-        if not is_pose_valid:
-            return None,None,None
-
-        return rgb_img, depth_img, pose.astype(np.float32)
-
-    def isPoseValid(self, pose):
-        is_nan = np.isnan(pose).any() or np.isinf(pose).any()
-        if is_nan:
-            return False
-
-        R_matrix = pose[:3, :3]
-        I = np.identity(3)
-        is_rotation_valid = ( np.isclose( np.matmul(R_matrix, R_matrix.T), I , atol=1e-3) ).all and np.isclose(np.linalg.det(R_matrix) , 1, atol=1e-3)
-        if not is_rotation_valid:
-            return False
-
-        return True
-
-    def getDepthScaledFromIndex(self, index):
-        if(index not in self.indexes):
-            return None
-
-        depth_img = None
-        if self.preload_depth:
-                depth_img = self.depths[index]
-        else:
-            depth_f = self.depth_path_map[index]
-            depth_img = cv2.imread(depth_f,cv2.IMREAD_UNCHANGED)
-
-        depth_img_scaled = cv2.rgbd.rescaleDepth(depth_img, cv2.CV_32FC1)
-
-        return depth_img_scaled
-
-    def getCameraMatrix(self):
-        # return depth camera matrix 
-        K = np.array([[544.47329,0,320],[0,544.47329,240],[0,0,1]])
-        return K.astype(np.float32)
-
-def getHostId(gpu_id):
-    HOST = str(gpu_id) + ".0.0."+str(gpu_id)
-    return HOST
-def getGpuDevice(gpu_id, gpu_num):
-    assert(gpu_id >= 0)
-    assert(gpu_num > gpu_id)
-    if(gpu_num == 1):
-        return "cuda"
-    return "cuda:"+str(gpu_id)
-def isPoseValid( pose):
-    is_nan = np.isnan(pose).any() or np.isinf(pose).any()
-    if is_nan:
-        return False
-
-    R_matrix = pose[:3, :3]
-    I = np.identity(3)
-    is_rotation_valid = ( np.isclose( np.matmul(R_matrix, R_matrix.T), I , atol=1e-3) ).all and np.isclose(np.linalg.det(R_matrix) , 1, atol=1e-3)
-    if not is_rotation_valid:
-        return False
-
-    return True
